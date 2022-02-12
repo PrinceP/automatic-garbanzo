@@ -120,6 +120,16 @@ static PyObject* perform_preprocess(PyObject* self, PyObject* args){
     return image;
 }
 
+static PyObject* add_capacity(PyObject* self, PyObject* args){
+  int n;
+  if (!PyArg_ParseTuple(args, "i", &n))
+    return NULL;
+
+  list_of_images.reserve(n);
+  return Py_None;
+}
+
+
 static PyObject* add_images(PyObject* self, PyObject* args){
 
   PyObject *size;
@@ -161,6 +171,7 @@ static PyObject* clear_images(PyObject* self, PyObject* args){
 static PyMethodDef myMethods[] = {
     {"helloworld", helloworld, METH_NOARGS, "Prints Hello World"},
     {"perform_inference", perform_inference, METH_VARARGS, "do inference with CUDA"},
+    {"add_capacity", add_capacity, METH_VARARGS, "initialize capacity"},
     {"add_images", add_images, METH_VARARGS, "add images"},
     {"clear_images", clear_images, METH_VARARGS, "clear images"},
     {NULL, NULL, 0, NULL}

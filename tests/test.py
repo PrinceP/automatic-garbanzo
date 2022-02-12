@@ -6,6 +6,10 @@ import pycuda.driver as cuda
 import pycuda.autoinit
 import numpy as np
 
+
+engine_path = '/app/models/bcc.trt'
+myModule.load_engine(engine_path)
+
 #Batch of images
 all_batch_images = []
 all_meta_info = []
@@ -22,8 +26,6 @@ for image_path in os.listdir('/app/samples/'):
 batch_size = 2
 batch_images = all_batch_images[0:batch_size]
 crop_info = all_meta_info[0:batch_size]
-
-myModule.helloworld()
 myModule.add_capacity(batch_size)
 print("Start")
 

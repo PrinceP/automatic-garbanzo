@@ -2,40 +2,33 @@
 #include <stdio.h>
 #include <Python.h>
 #include <numpy/arrayobject.h>
+
 #include <iostream>
 #include <opencv2/opencv.hpp>
 
 #include <cuda_runtime.h>
 #include <cstdint>
-#include <cuda_runtime_api.h>
 
+#include "NvInfer.h"
+#include "logging.h"
+#include "cuda_utils.h"
+#include <fstream>
+static Logger gLogger;
+using namespace nvinfer1;
 
 #define MAX_IMAGE_INPUT_SIZE_THRESH 3000 * 3000
 
 
-#ifndef CUDA_CHECK
-#define CUDA_CHECK(callstr)\
-    {\
-        cudaError_t error_code = callstr;\
-        if (error_code != cudaSuccess) {\
-            std::cerr << "CUDA error " << error_code << " at " << __FILE__ << ":" << __LINE__;\
-            assert(0);\
-        }\
-    }
-#endif  // CUDA_CHECK
-
-
 
 extern void preprocess_kernel_img(uint8_t* src, int src_width, int src_height,
-                           float* dst, int dst_width, int dst_height);
-                           //cudaStream_t stream);
+                           float* dst, int dst_width, int dst_height, cv::Rect crop,
+                           float mean_values[3], float scale_values[3],
+                           cudaStream_t stream);
 
 
-
-static PyObject* helloworld(PyObject* self, PyObject* args) {
-    printf("Hello World\n");
-    return Py_None;
-}
+static IRuntime* runtime;
+static ICudaEngine* engine;
+static IExecutionContext* context;
 
 static std::vector<cv::Mat> list_of_images;
 
@@ -78,8 +71,8 @@ static PyObject* perform_preprocess(PyObject* self, PyObject* args){
     printf("Hello PreProcess 3.2\n");
     CUDA_CHECK(cudaMemcpy(img_device,img_host,size_image,cudaMemcpyHostToDevice));
     printf("Hello PreProcess 4\n");
-    preprocess_kernel_img(img_device, input_Width, input_Height,
-        outArr_device,  output_Width, output_Height);
+    /* preprocess_kernel_img(img_device, input_Width, input_Height, */
+    /*     outArr_device,  output_Width, output_Height); */
     printf("Hello PreProcess 5\n");
     CUDA_CHECK(cudaMemcpy(outArr_host, outArr_device, size_image_dst, cudaMemcpyDeviceToHost));
     cv::Mat float_R = cv::Mat(output_Height, output_Width,CV_32FC1, outArr_host);
@@ -154,11 +147,45 @@ static PyObject* add_images(PyObject* self, PyObject* args){
   return Py_None;
 }
 
+static PyObject* load_engine(PyObject* self, PyObject* args){
+
+  char *filename;
+  /* Parse arguments */
+  if(!PyArg_ParseTuple(args, "s", &filename)) {
+    return NULL;
+  }
+
+  std::ifstream file(filename, std::ios::binary);
+  if (!file.good()) {
+    std::cerr << "read " << filename << " error!" << std::endl;
+    return Py_None;
+  }
+  char *trtModelStream = nullptr;
+  size_t size = 0;
+  file.seekg(0, file.end);
+  size = file.tellg();
+  file.seekg(0, file.beg);
+  trtModelStream = new char[size];
+  assert(trtModelStream);
+  file.read(trtModelStream, size);
+  file.close();
+
+  runtime = createInferRuntime(gLogger);
+  assert(runtime != nullptr);
+  engine = runtime->deserializeCudaEngine(trtModelStream, size);
+  assert(engine != nullptr);
+  context = engine->createExecutionContext();
+  assert(context != nullptr);
+  delete[] trtModelStream;
+
+  return Py_None; 
+}
 
 static PyObject* perform_inference(PyObject* self, PyObject* args){
   
   int length = list_of_images.size();
   printf("Total Images taken: %d \n", length);
+
   return Py_None;
 }
 
@@ -169,9 +196,9 @@ static PyObject* clear_images(PyObject* self, PyObject* args){
 
 
 static PyMethodDef myMethods[] = {
-    {"helloworld", helloworld, METH_NOARGS, "Prints Hello World"},
     {"perform_inference", perform_inference, METH_VARARGS, "do inference with CUDA"},
     {"add_capacity", add_capacity, METH_VARARGS, "initialize capacity"},
+    {"load_engine", load_engine, METH_VARARGS, "initialize trt engine"},
     {"add_images", add_images, METH_VARARGS, "add images"},
     {"clear_images", clear_images, METH_VARARGS, "clear images"},
     {NULL, NULL, 0, NULL}

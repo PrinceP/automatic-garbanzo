@@ -1,6 +1,4 @@
 #include "preprocess.h"
-#include <opencv2/opencv.hpp>
-#include <opencv2/imgproc.hpp>
 
 __global__ void warpaffine_kernel( 
     uint8_t* src, int src_line_size, int src_width, 
@@ -100,38 +98,18 @@ __global__ void warpaffine_kernel(
 
 void preprocess_kernel_img(
     uint8_t* src, int src_width, int src_height,
-    float* dst, int dst_width, int dst_height){
-     
-    //cudaStream_t stream) {
-    
-    int detector = 1;
-    int cropX = 1630;
-    int cropY = 300;
+    float* dst, int dst_width, int dst_height,
+    float Imean_values[3],
+    float Iscale_values[3],
+    cv::Rect crop,
+    cudaStream_t stream) {
+    int cropX = crop.x;
+    int cropY = crop.y;
+    int cropHeight = crop.height;
+    int cropWidth = crop.width;
 
-    int cropHeight = 240;
-    int cropWidth = 140;
-
-    if(!detector){
-
-    }
-    else{
-       cropX = 0;
-       cropY = 0;
-  
-       cropHeight = src_height;
-       cropWidth = src_width;
-    }
     AffineMatrix s2d,d2s;
     float scale = std::min(dst_height / (float)cropHeight, dst_width / (float)cropWidth);
-/*     s2d.value[0] = scale; */
-/*     s2d.value[1] = 0; */
-/*     s2d.value[2] = -scale * src_width  * 0.5  + dst_width * 0.5; */
-/*     s2d.value[3] = 0; */
-/*     s2d.value[4] = scale; */
-/*     s2d.value[5] = -scale * src_height * 0.5 + dst_height * 0.5; */
-/*  */
-
-    //float scale = std::min(cropHeight / (float) src_height, cropWidth / (float)src_width );
     s2d.value[0] = scale;
     s2d.value[1] = 0;
     s2d.value[2] = -scale * cropWidth  * 0.5  + dst_width * 0.5;
@@ -144,21 +122,21 @@ void preprocess_kernel_img(
     cv::invertAffineTransform(m2x3_s2d, m2x3_d2s);
     
     memcpy(d2s.value, m2x3_d2s.ptr<float>(0), sizeof(d2s.value));
-    d2s.mean_values[0]=0; 
-    d2s.mean_values[1]=0;
-    d2s.mean_values[2]=0;
+    d2s.mean_values[0]=Imean_values[0]; 
+    d2s.mean_values[1]=Imean_values[1];
+    d2s.mean_values[2]=Imean_values[2];
 
-    d2s.scale_values[0]=1; 
-    d2s.scale_values[1]=1;
-    d2s.scale_values[2]=1;
+    d2s.scale_values[0]=Iscale_values[0]; 
+    d2s.scale_values[1]=Iscale_values[1];
+    d2s.scale_values[2]=Iscale_values[2];
     
     int jobs = dst_height * dst_width;
     int threads = 256;
     int blocks = ceil(jobs / (float)threads);
 
 
-    //warpaffine_kernel<<<blocks, threads, 0, stream>>>(
-    warpaffine_kernel<<<blocks, threads>>>(
+    warpaffine_kernel<<<blocks, threads, 0, stream>>>(
+    /* warpaffine_kernel<<<blocks, threads>>>( */
         src + src_width*3*cropY + cropX*3, src_width*3, cropWidth,
         cropHeight, dst, dst_width,
         dst_height, 128, d2s, jobs);

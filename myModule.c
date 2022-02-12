@@ -13,24 +13,43 @@
 #include "logging.h"
 #include "cuda_utils.h"
 #include <fstream>
+#include <chrono>
+
 static Logger gLogger;
 using namespace nvinfer1;
 
 #define MAX_IMAGE_INPUT_SIZE_THRESH 3000 * 3000
+#define INPUT_BLOB_NAME "input0"
+#define OUTPUT_BLOB_NAME "output0"
 
 
 
 extern void preprocess_kernel_img(uint8_t* src, int src_width, int src_height,
-                           float* dst, int dst_width, int dst_height, cv::Rect crop,
+                           float* dst, int dst_width, int dst_height,
                            float mean_values[3], float scale_values[3],
-                           cudaStream_t stream);
+                           cv::Rect crop);
+                           /* cudaStream_t stream); */
 
 
 static IRuntime* runtime;
 static ICudaEngine* engine;
 static IExecutionContext* context;
+static cudaStream_t stream;
 
 static std::vector<cv::Mat> list_of_images;
+static std::vector<cv::Rect> list_of_crops;
+static float* buffers[2];
+static float* output;
+static uint8_t* img_host = nullptr;
+static uint8_t* img_device = nullptr;
+static int inputIndex;
+static int outputIndex;
+static int inputHeight;
+static int inputWidth;
+static int batchSize; 
+static int outputSize;
+
+
 
 static PyObject* perform_preprocess(PyObject* self, PyObject* args){
     PyArrayObject *input;
@@ -122,6 +141,25 @@ static PyObject* add_capacity(PyObject* self, PyObject* args){
   return Py_None;
 }
 
+static PyObject* add_crops(PyObject* self, PyObject* args){
+
+  PyObject *size;
+
+  if (!PyArg_ParseTuple(args, "O!", &PyTuple_Type, &size)) {
+    return NULL;
+  }
+  int x = PyLong_AsLong(PyTuple_GetItem(size ,0));
+  int y = PyLong_AsLong(PyTuple_GetItem(size ,1));
+  int w = PyLong_AsLong(PyTuple_GetItem(size ,2));
+  int h = PyLong_AsLong(PyTuple_GetItem(size ,3));
+
+
+  cv::Rect my_crop(x, y, w, h);
+  list_of_crops.push_back(my_crop);
+
+  return Py_None;
+}
+
 
 static PyObject* add_images(PyObject* self, PyObject* args){
 
@@ -150,10 +188,15 @@ static PyObject* add_images(PyObject* self, PyObject* args){
 static PyObject* load_engine(PyObject* self, PyObject* args){
 
   char *filename;
+  int BatchSize, InputH, InputW, OutputSize;
   /* Parse arguments */
-  if(!PyArg_ParseTuple(args, "s", &filename)) {
+  if(!PyArg_ParseTuple(args, "siiii", &filename, &BatchSize, &InputH, &InputW, &OutputSize)) {
     return NULL;
   }
+  inputWidth = InputW;
+  inputHeight = InputH;
+  batchSize = BatchSize;
+  outputSize = OutputSize;
 
   std::ifstream file(filename, std::ios::binary);
   if (!file.good()) {
@@ -177,7 +220,23 @@ static PyObject* load_engine(PyObject* self, PyObject* args){
   context = engine->createExecutionContext();
   assert(context != nullptr);
   delete[] trtModelStream;
+  
+  inputIndex = engine->getBindingIndex(INPUT_BLOB_NAME);
+  outputIndex = engine->getBindingIndex(OUTPUT_BLOB_NAME);
+  assert(inputIndex == 0);
+  assert(outputIndex == 1);
+  
+  CUDA_CHECK(cudaStreamCreate(&stream));
 
+  // Create GPU buffers on device
+  CUDA_CHECK(cudaMalloc((void**)&buffers[inputIndex], BatchSize * 3 * InputH * InputW * sizeof(float)));
+  CUDA_CHECK(cudaMalloc((void**)&buffers[outputIndex], BatchSize * OutputSize * sizeof(float)));
+  output = new float[BatchSize * OutputSize];
+
+  // prepare input data cache in pinned memory 
+  CUDA_CHECK(cudaMallocHost((void**)&img_host, MAX_IMAGE_INPUT_SIZE_THRESH * 3));
+  // prepare input data cache in device memory
+  CUDA_CHECK(cudaMalloc((void**)&img_device, MAX_IMAGE_INPUT_SIZE_THRESH * 3));
   return Py_None; 
 }
 
@@ -185,6 +244,49 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
   
   int length = list_of_images.size();
   printf("Total Images taken: %d \n", length);
+
+  float mean_values[3] = {0.485, 0.456, 0.406};
+  float scale_values[3] = {0.229, 0.224, 0.225};
+
+  
+  float* buffer_idx = (float*)buffers[inputIndex];
+  for(int b=0; b < length; b++){
+    cv::Mat img = list_of_images[b];
+    cv::Rect crop_of_img  = list_of_crops[b];
+
+    size_t  size_image = img.cols * img.rows * 3;
+    size_t  size_image_dst = inputHeight * inputWidth * 3;
+    //copy data to pinned memory
+    memcpy(img_host,img.data,size_image);
+    //copy data to device memory
+    CUDA_CHECK(cudaMemcpyAsync(img_device,img_host,size_image,cudaMemcpyHostToDevice,stream));
+    preprocess_kernel_img(img_device, img.cols, img.rows, 
+        buffer_idx, inputWidth, inputHeight, 
+        mean_values, scale_values,
+        crop_of_img);
+        /* stream);        */
+    buffer_idx += size_image_dst; 
+  }
+  
+  auto start = std::chrono::system_clock::now();
+  context->enqueue(batchSize, (void**)buffers, stream, nullptr);
+  auto end = std::chrono::system_clock::now();
+  std::cout << "inference time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
+
+  try{
+    CUDA_CHECK(cudaMemcpyAsync(output, buffers[outputIndex], length * outputSize * sizeof(float), cudaMemcpyDeviceToHost, stream));
+  }catch(std::runtime_error error){
+    std::cout << "Cuda Exception caught" << error.what() <<std::endl;    
+  }
+
+  cudaStreamSynchronize(stream);
+  for (int b = 0; b < length; b++) {
+    for (unsigned int i = 0; i < outputSize; i++)
+    {
+      std::cout << output[b + i] << ", ";
+    }
+    std::cout << std::endl;
+  }
 
   return Py_None;
 }
@@ -195,12 +297,36 @@ static PyObject* clear_images(PyObject* self, PyObject* args){
 }
 
 
+static PyObject* clear_crops(PyObject* self, PyObject* args){
+  list_of_crops.clear();
+  return Py_None; 
+}
+
+static PyObject* clear_cache(PyObject* self, PyObject* args){
+  //Release stream
+  cudaStreamDestroy(stream);
+  //Destroy Bufferes
+  CUDA_CHECK(cudaFree(img_device));
+  CUDA_CHECK(cudaFreeHost(img_host));
+  CUDA_CHECK(cudaFree(buffers[inputIndex]));
+  CUDA_CHECK(cudaFree(buffers[outputIndex]));
+  // Destroy the engine
+  context->destroy();
+  engine->destroy();
+  runtime->destroy();
+  return Py_None; 
+}
+
+
 static PyMethodDef myMethods[] = {
     {"perform_inference", perform_inference, METH_VARARGS, "do inference with CUDA"},
     {"add_capacity", add_capacity, METH_VARARGS, "initialize capacity"},
     {"load_engine", load_engine, METH_VARARGS, "initialize trt engine"},
     {"add_images", add_images, METH_VARARGS, "add images"},
+    {"add_crops", add_crops, METH_VARARGS, "add images"},
     {"clear_images", clear_images, METH_VARARGS, "clear images"},
+    {"clear_crops", clear_crops, METH_VARARGS, "clear images"},
+    {"clear_cache", clear_cache, METH_VARARGS, "clear images"},
     {NULL, NULL, 0, NULL}
 };
 

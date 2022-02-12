@@ -101,8 +101,8 @@ void preprocess_kernel_img(
     float* dst, int dst_width, int dst_height,
     float Imean_values[3],
     float Iscale_values[3],
-    cv::Rect crop,
-    cudaStream_t stream) {
+    cv::Rect crop) {
+    /* cudaStream_t stream) { */
     int cropX = crop.x;
     int cropY = crop.y;
     int cropHeight = crop.height;
@@ -135,8 +135,8 @@ void preprocess_kernel_img(
     int blocks = ceil(jobs / (float)threads);
 
 
-    warpaffine_kernel<<<blocks, threads, 0, stream>>>(
-    /* warpaffine_kernel<<<blocks, threads>>>( */
+    /* warpaffine_kernel<<<blocks, threads, 0, stream>>>( */
+    warpaffine_kernel<<<blocks, threads>>>(
         src + src_width*3*cropY + cropX*3, src_width*3, cropWidth,
         cropHeight, dst, dst_width,
         dst_height, 128, d2s, jobs);

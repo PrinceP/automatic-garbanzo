@@ -33,7 +33,7 @@ setup(name = 'myModule', version = '1.0',  \
    ext_modules = [
       Extension('myModule', ['myModule.c'],
       include_dirs=[np.get_include(), os.path.join(CUDA_HOME, "include"), OPENCV_INCLUDE, TRT_INCLUDE],
-      libraries=["preprocess", "cudart", "opencv_core", "opencv_imgproc", "opencv_imgcodecs", "nvinfer"],
+      libraries=["preprocess", "cudart", "opencv_core", "opencv_imgproc", "opencv_imgcodecs", "nvinfer", "nvonnxparser"],
       #library_dirs = ["/home/uncanny/projects/CUDA/Python-C-API-CUDA-Tutorial_STATIC/preprocess_test/build", os.path.join(CUDA_HOME, "lib64"), OPENCV_LIBS],
       library_dirs = ["./preprocess_test/build", os.path.join(CUDA_HOME, "lib64"), OPENCV_LIBS, TRT_LIB],
       extra_compile_args=['-std=c++11', '-fPIC'],

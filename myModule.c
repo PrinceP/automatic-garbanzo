@@ -12,8 +12,10 @@
 #include "NvInfer.h"
 #include "logging.h"
 #include "cuda_utils.h"
+#include "NvOnnxParser.h"
 #include <fstream>
 #include <chrono>
+using namespace nvonnxparser;
 
 static Logger gLogger;
 using namespace nvinfer1;
@@ -138,6 +140,7 @@ static PyObject* add_capacity(PyObject* self, PyObject* args){
     return NULL;
 
   list_of_images.reserve(n);
+  list_of_crops.reserve(n);
   return Py_None;
 }
 
@@ -185,6 +188,59 @@ static PyObject* add_images(PyObject* self, PyObject* args){
   return Py_None;
 }
 
+
+static PyObject* load_onnx(PyObject* self, PyObject* args){
+
+  char *filename, *enginename;
+  int BatchSize, InputH, InputW;
+  /* Parse arguments */
+  if(!PyArg_ParseTuple(args, "ssiii", &filename, &enginename, &BatchSize, &InputH, &InputW)) {
+    return NULL;
+  }
+  std::ifstream file(filename, std::ios::binary);
+  if (!file.good()) {
+    std::cerr << "read " << filename << " error!" << std::endl;
+    return Py_None;
+  }
+  IBuilder* builder = createInferBuilder(gLogger);
+  builder->setMaxBatchSize(BatchSize + 3);
+  uint32_t flag = 1U <<static_cast<uint32_t>
+    (NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
+
+  INetworkDefinition* network = builder->createNetworkV2(flag);
+  IParser*  parser = createParser(*network, gLogger);
+  parser->parseFromFile(filename, 3);
+  for (int32_t i = 0; i < parser->getNbErrors(); ++i)
+  {
+    std::cout << parser->getError(i)->desc() << std::endl;
+  }
+
+  IOptimizationProfile* profile = builder->createOptimizationProfile();
+  profile->setDimensions("input0", OptProfileSelector::kMIN, Dims4(1,3,InputH,InputW));
+  profile->setDimensions("input0", OptProfileSelector::kOPT, Dims4(BatchSize,3,InputH,InputW));
+  profile->setDimensions("input0", OptProfileSelector::kMAX, Dims4(BatchSize+3,3,InputH,InputW));
+
+
+  IBuilderConfig* config = builder->createBuilderConfig();
+  config->setMaxWorkspaceSize(1U << 20);
+  config->addOptimizationProfile(profile);
+  IHostMemory*  serializedModel = builder->buildSerializedNetwork(*network, *config);
+  std::ofstream p(enginename, std::ios::binary);
+  if (!p) {
+    std::cerr << "could not open plan output file" << std::endl;
+    return Py_None;
+  }
+  p.write(reinterpret_cast<const char*>(serializedModel->data()), serializedModel->size());
+
+  delete parser;
+  delete network;
+  delete config;
+  delete builder;
+  delete serializedModel;
+
+  return Py_None;
+}
+
 static PyObject* load_engine(PyObject* self, PyObject* args){
 
   char *filename;
@@ -227,7 +283,9 @@ static PyObject* load_engine(PyObject* self, PyObject* args){
   assert(outputIndex == 1);
   
   CUDA_CHECK(cudaStreamCreate(&stream));
-
+  
+  context->setBindingDimensions(inputIndex, Dims4(BatchSize, 3, InputH, InputW));
+  context->setOptimizationProfileAsync(0, stream);
   // Create GPU buffers on device
   CUDA_CHECK(cudaMalloc((void**)&buffers[inputIndex], BatchSize * 3 * InputH * InputW * sizeof(float)));
   CUDA_CHECK(cudaMalloc((void**)&buffers[outputIndex], BatchSize * OutputSize * sizeof(float)));
@@ -280,15 +338,28 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
   }
 
   cudaStreamSynchronize(stream);
+  double outData[length][outputSize];
   for (int b = 0; b < length; b++) {
     for (unsigned int i = 0; i < outputSize; i++)
     {
       std::cout << output[b + i] << ", ";
+      outData[b][i] = output[b + i];
     }
     std::cout << std::endl;
   }
 
-  return Py_None;
+  PyObject *result = PyTuple_New(length);
+  for (Py_ssize_t i = 0; i < length; i++) {
+    Py_ssize_t len = outputSize;
+    PyObject *item = PyTuple_New(len);
+    for (Py_ssize_t j = 0; j < len; j++)
+      PyTuple_SET_ITEM(item, j, PyFloat_FromDouble(outData[i][j]));
+    PyTuple_SET_ITEM(result, i, item);
+  }
+
+  
+
+  return result;
 }
 
 static PyObject* clear_images(PyObject* self, PyObject* args){
@@ -322,6 +393,7 @@ static PyMethodDef myMethods[] = {
     {"perform_inference", perform_inference, METH_VARARGS, "do inference with CUDA"},
     {"add_capacity", add_capacity, METH_VARARGS, "initialize capacity"},
     {"load_engine", load_engine, METH_VARARGS, "initialize trt engine"},
+    {"load_onnx", load_onnx, METH_VARARGS, "initialize trt engine"},
     {"add_images", add_images, METH_VARARGS, "add images"},
     {"add_crops", add_crops, METH_VARARGS, "add images"},
     {"clear_images", clear_images, METH_VARARGS, "clear images"},

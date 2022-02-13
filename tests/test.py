@@ -7,7 +7,7 @@ import pycuda.autoinit
 import numpy as np
 
 
-batch_size = 2
+batch_size = 4
 onnx_path = '/app/models/bcc.onnx'
 engine_path = '/app/models/bcc.trt'
 if os.path.exists(engine_path):

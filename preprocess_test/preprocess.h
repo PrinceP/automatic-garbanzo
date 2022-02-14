@@ -18,8 +18,8 @@ struct AffineMatrix{
                            float* dst, int dst_width, int dst_height,
                            float Imean_values[3],
                            float Iscale_values[3],
-                           cv::Rect crop);
-                           /* cudaStream_t stream); */
+                           cv::Rect crop,
+                           cudaStream_t stream);
   /* void preprocess_kernel_img(uint8_t* src, int src_width, int src_height, */
   /*                          float* dst, int dst_width, int dst_height); */
 /* } */

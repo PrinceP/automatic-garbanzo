@@ -29,8 +29,8 @@ using namespace nvinfer1;
 extern void preprocess_kernel_img(uint8_t* src, int src_width, int src_height,
                            float* dst, int dst_width, int dst_height,
                            float mean_values[3], float scale_values[3],
-                           cv::Rect crop);
-                           /* cudaStream_t stream); */
+                           cv::Rect crop,
+                           cudaStream_t stream);
 
 
 static IRuntime* runtime;
@@ -321,8 +321,8 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
     preprocess_kernel_img(img_device, img.cols, img.rows, 
         buffer_idx, inputWidth, inputHeight, 
         mean_values, scale_values,
-        crop_of_img);
-        /* stream);        */
+        crop_of_img,
+        stream);       
     buffer_idx += size_image_dst; 
   }
   

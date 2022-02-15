@@ -8,12 +8,13 @@ import numpy as np
 
 
 batch_size = 4
+fp16 = 1
 onnx_path = '/app/models/bcc.onnx'
 engine_path = '/app/models/bcc.trt'
 if os.path.exists(engine_path):
     os.remove(engine_path)
 #Path to engine, batch size, input height, input width, output total classes of model
-myModule.load_onnx(onnx_path, engine_path, batch_size, 224, 224)
+myModule.load_onnx(onnx_path, engine_path, batch_size, 224, 224, fp16)
 myModule.load_engine(engine_path, batch_size, 224, 224, 10)
 
 #Batch of images

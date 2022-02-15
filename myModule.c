@@ -192,9 +192,9 @@ static PyObject* add_images(PyObject* self, PyObject* args){
 static PyObject* load_onnx(PyObject* self, PyObject* args){
 
   char *filename, *enginename;
-  int BatchSize, InputH, InputW;
+  int BatchSize, InputH, InputW, isFP16;
   /* Parse arguments */
-  if(!PyArg_ParseTuple(args, "ssiii", &filename, &enginename, &BatchSize, &InputH, &InputW)) {
+  if(!PyArg_ParseTuple(args, "ssiiii", &filename, &enginename, &BatchSize, &InputH, &InputW, &isFP16)) {
     return NULL;
   }
   std::ifstream file(filename, std::ios::binary);
@@ -224,6 +224,9 @@ static PyObject* load_onnx(PyObject* self, PyObject* args){
   IBuilderConfig* config = builder->createBuilderConfig();
   config->setMaxWorkspaceSize(1U << 20);
   config->addOptimizationProfile(profile);
+  if(isFP16){
+    config->setFlag(BuilderFlag::kFP16);
+  }
   IHostMemory*  serializedModel = builder->buildSerializedNetwork(*network, *config);
   std::ofstream p(enginename, std::ios::binary);
   if (!p) {

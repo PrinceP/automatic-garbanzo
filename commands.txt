@@ -1,1 +1,0 @@
-sudo docker run -v {$PWD}:/app -it cuda_kernel_workspace bash

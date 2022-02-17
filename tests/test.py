@@ -9,8 +9,8 @@ import numpy as np
 
 batch_size = 4
 fp16 = 1
-onnx_path = '/app/models/bcc.onnx'
-engine_path = '/app/models/bcc.trt'
+onnx_path = '/app/models/bcc/bcc.onnx'
+engine_path = '/app/models/bcc/bcc.trt'
 if os.path.exists(engine_path):
     os.remove(engine_path)
 #Path to engine, batch size, input height, input width, output total classes of model
@@ -56,6 +56,8 @@ print("Start")
 for i,single_image in enumerate(batch_images):
     single_crop = crop_info[i]
     dims = single_image.shape
+    print(dims)
+    print(single_crop)
     single_image = single_image.ravel()
     myModule.add_images(dims, single_image)
     myModule.add_crops(single_crop)

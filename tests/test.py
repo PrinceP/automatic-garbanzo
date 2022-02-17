@@ -9,13 +9,19 @@ import numpy as np
 
 batch_size = 4
 fp16 = 1
-onnx_path = '/app/models/bcc/bcc.onnx'
-engine_path = '/app/models/bcc/bcc.trt'
+onnx_path = '/app/models/reid/baseline_R18_512.onnx'
+engine_path = '/app/models/reid/baseline_R18_512.trt'
+input_height = 256
+input_width = 256
+output_size = 512
+
+mean_values = (0.485, 0.456, 0.406)
+scale_values = (0.229, 0.224, 0.225)
 if os.path.exists(engine_path):
     os.remove(engine_path)
 #Path to engine, batch size, input height, input width, output total classes of model
-myModule.load_onnx(onnx_path, engine_path, batch_size, 224, 224, fp16)
-myModule.load_engine(engine_path, batch_size, 224, 224, 10)
+myModule.load_onnx(onnx_path, engine_path, batch_size, input_height, input_width, fp16)
+myModule.load_engine(engine_path, batch_size, input_height, input_width, output_size)
 
 #Batch of images
 all_batch_images = []
@@ -62,7 +68,7 @@ for i,single_image in enumerate(batch_images):
     myModule.add_images(dims, single_image)
     myModule.add_crops(single_crop)
 
-trt_outputs = myModule.perform_inference()
+trt_outputs = myModule.perform_inference(mean_values, scale_values)
 print("Inferenced probs : ")
 print(trt_outputs)
 

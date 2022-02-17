@@ -305,11 +305,26 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
   
   int length = list_of_images.size();
   printf("Total Images taken: %d \n", length);
+  PyObject *mean_values_input;
+  PyObject *scale_values_input;
 
-  float mean_values[3] = {0.485, 0.456, 0.406};
-  float scale_values[3] = {0.229, 0.224, 0.225};
+  if (!PyArg_ParseTuple(args, "O!O!", &PyTuple_Type, &mean_values_input, &PyTuple_Type, &scale_values_input)) {
+    return NULL;
+  }
 
-  
+  float x1 = PyFloat_AsDouble(PyTuple_GetItem(mean_values_input ,0));
+  float y1 = PyFloat_AsDouble(PyTuple_GetItem(mean_values_input ,1));
+  float z1 = PyFloat_AsDouble(PyTuple_GetItem(mean_values_input ,2));
+
+
+  float x2 = PyFloat_AsDouble(PyTuple_GetItem(scale_values_input ,0));
+  float y2 = PyFloat_AsDouble(PyTuple_GetItem(scale_values_input ,1));
+  float z2 = PyFloat_AsDouble(PyTuple_GetItem(scale_values_input ,2));
+
+
+  float mean_values[3] = {x1, y1, z1};
+  float scale_values[3] ={x2, y2, y2};
+   
   float* buffer_idx = (float*)buffers[inputIndex];
   for(int b=0; b < length; b++){
     cv::Mat img = list_of_images[b];

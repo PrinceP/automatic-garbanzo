@@ -3,6 +3,9 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
+
+#include <stdlib.h>
+
 #include <iostream>
 #include <opencv2/opencv.hpp>
 
@@ -21,8 +24,10 @@ static Logger gLogger;
 using namespace nvinfer1;
 
 #define MAX_IMAGE_INPUT_SIZE_THRESH 3000 * 3000
+/* #define INPUT_BLOB_NAME "batched_inputs.1" */
 #define INPUT_BLOB_NAME "input0"
 #define OUTPUT_BLOB_NAME "output0"
+/* #define OUTPUT_BLOB_NAME "identity_out" */
 
 
 
@@ -30,6 +35,7 @@ extern void preprocess_kernel_img(uint8_t* src, int src_width, int src_height,
                            float* dst, int dst_width, int dst_height,
                            float mean_values[3], float scale_values[3],
                            cv::Rect crop,
+                           int letterbox,
                            cudaStream_t stream);
 
 
@@ -41,9 +47,10 @@ static cudaStream_t stream;
 static std::vector<cv::Mat> list_of_images;
 static std::vector<cv::Rect> list_of_crops;
 static float* buffers[2];
-static float* output;
+/* static float* output; */
 static uint8_t* img_host = nullptr;
 static uint8_t* img_device = nullptr;
+static uint8_t** hostbuffers;
 static int inputIndex;
 static int outputIndex;
 static int inputHeight;
@@ -57,18 +64,25 @@ static PyObject* perform_preprocess(PyObject* self, PyObject* args){
     PyArrayObject *input;
     int input_Height, input_Width;
     int output_Height, output_Width;
+    
+    int x, y, w, h;
+
+
+
     printf("Hello PreProcess 1\n");
-    if (!PyArg_ParseTuple(args, "Oii",
+    if (!PyArg_ParseTuple(args, "Oiiiiii",
           &input,
-          &output_Width,  &output_Height))
+          &output_Width,  &output_Height,
+          &x, &y, &w, &h
+          ))
         return NULL;
     if (input->nd != 3) {
       fprintf(stderr, "invalid image\n");
-      return Py_None;
+      Py_RETURN_NONE;
     }
     if (input->dimensions[2] != 3) {
       fprintf(stderr, "invalid image\n");
-      return Py_None;
+      Py_RETURN_NONE;
     }
     input_Height = input->dimensions[0];
     input_Width = input->dimensions[1];
@@ -92,13 +106,29 @@ static PyObject* perform_preprocess(PyObject* self, PyObject* args){
     printf("Hello PreProcess 3.2\n");
     CUDA_CHECK(cudaMemcpy(img_device,img_host,size_image,cudaMemcpyHostToDevice));
     printf("Hello PreProcess 4\n");
-    /* preprocess_kernel_img(img_device, input_Width, input_Height, */
-    /*     outArr_device,  output_Width, output_Height); */
+
+    float mean_values[3] = { 0.485, 0.456, 0.406 };
+    float scale_values[3] ={ 0.229, 0.224, 0.225 };
+    cv::Rect my_crop(x, y, w, h);
+
+    preprocess_kernel_img(img_device, input_Width, input_Height, 
+         outArr_device,  output_Width, output_Height, mean_values, scale_values, my_crop, 0, stream); 
     printf("Hello PreProcess 5\n");
     CUDA_CHECK(cudaMemcpy(outArr_host, outArr_device, size_image_dst, cudaMemcpyDeviceToHost));
     cv::Mat float_R = cv::Mat(output_Height, output_Width,CV_32FC1, outArr_host);
     cv::Mat float_G = cv::Mat(output_Height, output_Width,CV_32FC1, outArr_host + output_Width * output_Height) ;
     cv::Mat float_B = cv::Mat(output_Height, output_Width,CV_32FC1, outArr_host + 2 * output_Width * output_Height);
+
+    FILE* fp = fopen("finaldata.bin", "wb");
+    fwrite(outArr_host, 1, sizeof(float) * output_Width * output_Height * 3, fp); 
+    fclose(fp);
+
+
+    float_R = float_R * scale_values[0] + mean_values[0];
+    float_G = float_G * scale_values[1] + mean_values[1];
+    float_B = float_B * scale_values[2] + mean_values[2];
+
+
     cv::Mat char_r, char_g, char_b;
     float_R.convertTo(char_r, CV_8UC1, 255.0);
     float_G.convertTo(char_g, CV_8UC1, 255.0);
@@ -110,28 +140,9 @@ static PyObject* perform_preprocess(PyObject* self, PyObject* args){
     cv::Mat new_output;
     cv::merge(channels, 3, new_output);
     cv::imwrite("final.jpg", new_output);
-    npy_intp dims[] = { output_Height, output_Width, 3 };
-    PyObject *image = PyArray_SimpleNew(3, dims, NPY_FLOAT);
-    if (!image) {
-      fprintf(stderr, "failed to allocate array\n");
-      return Py_None;
-    }
-    PyArrayObject *dstarray = (PyArrayObject *)image;
-    for (int y = 0; y < output_Height; y++) {
-      uint8_t *src = (uint8_t *)outArr_host + y * output_Width * 3;
-      uint8_t *dst = (uint8_t *)dstarray->data + y * output_Width * 3;
-      for (int x = 0; x < output_Width; x++) {
-        uint8_t r = src[x * 3 + 0];
-        uint8_t g = src[x * 3 + 1];
-        uint8_t b = src[x * 3 + 2];
-        dst[x * 3 + 0] = r;
-        dst[x * 3 + 1] = g;
-        dst[x * 3 + 2] = b;
-      }
-    }
-    CUDA_CHECK(cudaFree(img_device));
-    CUDA_CHECK(cudaFreeHost(img_host));
-    return image;
+
+
+  Py_RETURN_NONE;
 }
 
 static PyObject* add_capacity(PyObject* self, PyObject* args){
@@ -141,7 +152,7 @@ static PyObject* add_capacity(PyObject* self, PyObject* args){
 
   list_of_images.reserve(n);
   list_of_crops.reserve(n);
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 static PyObject* add_crops(PyObject* self, PyObject* args){
@@ -158,9 +169,10 @@ static PyObject* add_crops(PyObject* self, PyObject* args){
 
 
   cv::Rect my_crop(x, y, w, h);
+  std::cout << "C++ : " << x << " " << y << " "<< w << " " << h << std::endl;
   list_of_crops.push_back(my_crop);
 
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 
@@ -175,17 +187,40 @@ static PyObject* add_images(PyObject* self, PyObject* args){
   int rows = PyLong_AsLong(PyTuple_GetItem(size ,0));
   int cols = PyLong_AsLong(PyTuple_GetItem(size ,1));
   int nchannels = PyLong_AsLong(PyTuple_GetItem(size ,2));
-  char my_arr[rows * nchannels * cols];
+
+  /* char my_arr[rows * nchannels * cols]; */
+  
+  std::cout << rows << " "<< cols << " " << nchannels <<  std::endl;
+
+  std::cout << "Size = " << list_of_images.size() << std::endl;
+
+  unsigned char* p = hostbuffers[list_of_images.size()];
+    
+  std::cout << static_cast<void*>(p) << std::endl;
+  std::cout << static_cast<void*>(hostbuffers) << std::endl;
 
   for(size_t length = 0; length<(rows * nchannels * cols); length++){
-    my_arr[length] = (*(char *)PyArray_GETPTR1(image, length));
+
+    /* my_arr[length] = (*(char *)PyArray_GETPTR1(image, length)); */
+    p[length] =  (*(char *)PyArray_GETPTR1(image, length));
+  
   }
 
-  cv::Mat my_img = cv::Mat(cv::Size(cols, rows), CV_8UC3, &my_arr);
+
+  cv::Mat my_img = cv::Mat(cv::Size(cols, rows), CV_8UC3, p);
+
+  /* unsigned char * p = my_img.ptr(180, 320);   */
+  /* std::cout << "C++ : " << (float)p[0] << std::endl; */
+
+  
+
+
+  std::cout << "Size = " << list_of_images.size() << std::endl;
+
 
   list_of_images.push_back(my_img);
 
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 
@@ -200,10 +235,10 @@ static PyObject* load_onnx(PyObject* self, PyObject* args){
   std::ifstream file(filename, std::ios::binary);
   if (!file.good()) {
     std::cerr << "read " << filename << " error!" << std::endl;
-    return Py_None;
+    Py_RETURN_NONE;
   }
   IBuilder* builder = createInferBuilder(gLogger);
-  builder->setMaxBatchSize(BatchSize + 3);
+  builder->setMaxBatchSize(BatchSize + 20);
   uint32_t flag = 1U <<static_cast<uint32_t>
     (NetworkDefinitionCreationFlag::kEXPLICIT_BATCH); 
 
@@ -216,13 +251,22 @@ static PyObject* load_onnx(PyObject* self, PyObject* args){
   }
 
   IOptimizationProfile* profile = builder->createOptimizationProfile();
-  profile->setDimensions("input0", OptProfileSelector::kMIN, Dims4(1,3,InputH,InputW));
+  profile->setDimensions("input0", OptProfileSelector::kMIN, Dims4(BatchSize,3,InputH,InputW));
   profile->setDimensions("input0", OptProfileSelector::kOPT, Dims4(BatchSize,3,InputH,InputW));
-  profile->setDimensions("input0", OptProfileSelector::kMAX, Dims4(BatchSize+3,3,InputH,InputW));
+  profile->setDimensions("input0", OptProfileSelector::kMAX, Dims4(BatchSize,3,InputH,InputW));
+  
+  
+  /* ITensor* output_tensors = network->getOutput(0); */
+  /* network->unmarkOutput(*output_tensors); */
+  /* ITensor* identity_out_tensor = network->addIdentity( *output_tensors )->getOutput(0); */
+  /* const char* name = "identity_out"; */
+  /* identity_out_tensor->setName(name); */
+  /* network->markOutput(*identity_out_tensor); */
+
 
 
   IBuilderConfig* config = builder->createBuilderConfig();
-  config->setMaxWorkspaceSize(1U << 20);
+  config->setMaxWorkspaceSize(1U << 32);
   config->addOptimizationProfile(profile);
   if(isFP16){
     config->setFlag(BuilderFlag::kFP16);
@@ -231,7 +275,7 @@ static PyObject* load_onnx(PyObject* self, PyObject* args){
   std::ofstream p(enginename, std::ios::binary);
   if (!p) {
     std::cerr << "could not open plan output file" << std::endl;
-    return Py_None;
+    Py_RETURN_NONE;
   }
   p.write(reinterpret_cast<const char*>(serializedModel->data()), serializedModel->size());
 
@@ -241,7 +285,7 @@ static PyObject* load_onnx(PyObject* self, PyObject* args){
   delete builder;
   delete serializedModel;
 
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 static PyObject* load_engine(PyObject* self, PyObject* args){
@@ -260,7 +304,7 @@ static PyObject* load_engine(PyObject* self, PyObject* args){
   std::ifstream file(filename, std::ios::binary);
   if (!file.good()) {
     std::cerr << "read " << filename << " error!" << std::endl;
-    return Py_None;
+    Py_RETURN_NONE;
   }
   char *trtModelStream = nullptr;
   size_t size = 0;
@@ -288,17 +332,21 @@ static PyObject* load_engine(PyObject* self, PyObject* args){
   CUDA_CHECK(cudaStreamCreate(&stream));
   
   context->setBindingDimensions(inputIndex, Dims4(BatchSize, 3, InputH, InputW));
-  context->setOptimizationProfileAsync(0, stream);
+  /* context->setOptimizationProfileAsync(0, stream); */
   // Create GPU buffers on device
   CUDA_CHECK(cudaMalloc((void**)&buffers[inputIndex], BatchSize * 3 * InputH * InputW * sizeof(float)));
   CUDA_CHECK(cudaMalloc((void**)&buffers[outputIndex], BatchSize * OutputSize * sizeof(float)));
-  output = new float[BatchSize * OutputSize];
+  /* output = new float[BatchSize * OutputSize]; */
+
+  hostbuffers = (uint8_t**)malloc(sizeof(uint8_t*) * BatchSize);
+  for(int i= 0 ; i < BatchSize; i++)
+    CUDA_CHECK(cudaMallocHost(  &hostbuffers[i]   , MAX_IMAGE_INPUT_SIZE_THRESH * 3 ));
 
   // prepare input data cache in pinned memory 
   CUDA_CHECK(cudaMallocHost((void**)&img_host, MAX_IMAGE_INPUT_SIZE_THRESH * 3));
   // prepare input data cache in device memory
   CUDA_CHECK(cudaMalloc((void**)&img_device, MAX_IMAGE_INPUT_SIZE_THRESH * 3));
-  return Py_None; 
+  Py_RETURN_NONE; 
 }
 
 static PyObject* perform_inference(PyObject* self, PyObject* args){
@@ -323,29 +371,56 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
 
 
   float mean_values[3] = {x1, y1, z1};
-  float scale_values[3] ={x2, y2, y2};
+  float scale_values[3] ={x2, y2, z2};
    
   float* buffer_idx = (float*)buffers[inputIndex];
+  float* output = new float[length * outputSize];
+
   for(int b=0; b < length; b++){
+    
+    std::cout << b << std::endl;
+
     cv::Mat img = list_of_images[b];
     cv::Rect crop_of_img  = list_of_crops[b];
-
+  
+    unsigned char * p = img.ptr(180, 320);
+    std::cout << "Inference : " << (float)p[0] << std::endl;
+    std::cout << "Inference : " << crop_of_img.x << " " << crop_of_img.y << " " << crop_of_img.width << " " << crop_of_img.height << std::endl;
+  
     size_t  size_image = img.cols * img.rows * 3;
     size_t  size_image_dst = inputHeight * inputWidth * 3;
+
+    std::cout << size_image << std::endl;
+    std::cout << size_image_dst << std::endl;
     //copy data to pinned memory
-    memcpy(img_host,img.data,size_image);
+    
+/*     float my_data[3 * inputWidth * inputHeight]; */
+/*  */
+/*     FILE* fp = fopen("/app/samples/bcc_data/prince_crops/5_395_119_455_187.bin", "rb"); */
+/*     fread(my_data, 1, sizeof(float) *  inputWidth  * inputHeight * 3, fp); */
+/*     fclose(fp); */
+
+    /* size_image = inputWidth * inputHeight * 3 * sizeof(float); */
+    /* memcpy(img_host ,img.data,size_image); */
+    /* memcpy(img_host ,my_data,size_image); */
+
     //copy data to device memory
-    CUDA_CHECK(cudaMemcpyAsync(img_device,img_host,size_image,cudaMemcpyHostToDevice,stream));
+    /* CUDA_CHECK(cudaMemcpyAsync(buffer_idx,img.data,size_image,cudaMemcpyHostToDevice,stream)); */
+
+    CUDA_CHECK(cudaMemcpyAsync(img_device,img.data,size_image,cudaMemcpyHostToDevice,stream));
     preprocess_kernel_img(img_device, img.cols, img.rows, 
         buffer_idx, inputWidth, inputHeight, 
         mean_values, scale_values,
         crop_of_img,
+        1,          
         stream);       
-    buffer_idx += size_image_dst; 
+
+    buffer_idx += size_image_dst;
   }
   
   auto start = std::chrono::system_clock::now();
-  context->enqueue(batchSize, (void**)buffers, stream, nullptr);
+  context->enqueue(length, (void**)buffers, stream, nullptr);
+  /* context->enqueueV2((void**)buffers, stream, nullptr); */
   auto end = std::chrono::system_clock::now();
   std::cout << "inference time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << "ms" << std::endl;
 
@@ -354,14 +429,59 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
   }catch(std::runtime_error error){
     std::cout << "Cuda Exception caught" << error.what() <<std::endl;    
   }
-
+  
+  /* std::cout << length * outputSize * sizeof(float) << std::endl; */
   cudaStreamSynchronize(stream);
+
+
+    //Dump input 
+
+    size_t size_image_dst = inputWidth * inputHeight * 3;
+    float* our_input = new float[batchSize * size_image_dst];  
+
+    CUDA_CHECK(cudaMemcpy(our_input , buffers[inputIndex], size_image_dst * batchSize * sizeof(float), cudaMemcpyDeviceToHost));
+    
+    static int filcount = 0;
+    float *outArr_host;
+    for(int i =0; i < length; i++){
+      outArr_host = our_input + i * size_image_dst;
+      int output_Width = inputWidth;
+      int output_Height = inputHeight;
+      cv::Mat float_R = cv::Mat(output_Height, output_Width,CV_32FC1, outArr_host);
+      cv::Mat float_G = cv::Mat(output_Height, output_Width,CV_32FC1, outArr_host + output_Width * output_Height) ;
+      cv::Mat float_B = cv::Mat(output_Height, output_Width,CV_32FC1, outArr_host + 2 * output_Width * output_Height);
+
+      FILE* fp = fopen("testing/a.bin", "wb");
+      fwrite(outArr_host, 1, sizeof(float) * output_Width * output_Height * 3, fp); 
+      fclose(fp);
+      float_R = float_R * scale_values[0] + mean_values[0];
+      float_G = float_G * scale_values[1] + mean_values[1];
+      float_B = float_B * scale_values[2] + mean_values[2];
+      cv::Mat char_r, char_g, char_b;
+      float_R.convertTo(char_r, CV_8UC1, 255.0);
+      float_G.convertTo(char_g, CV_8UC1, 255.0);
+      float_B.convertTo(char_b, CV_8UC1, 255.0);
+      cv::Mat channels[3] = {char_b, char_g, char_r};
+      cv::Mat new_output;
+      cv::merge(channels, 3, new_output);
+      char filename[50];
+      sprintf(filename, "testing/a.jpg", filcount);
+      cv::imwrite(filename, new_output);
+      filcount++;
+    }
+
+
+
   double outData[length][outputSize];
+  std::cout << "Output size = " << outputSize << std::endl;
+
   for (int b = 0; b < length; b++) {
+    int offset = b * outputSize;
+    std::cout << "Offset: "<< offset << std::endl;
     for (unsigned int i = 0; i < outputSize; i++)
     {
-      std::cout << output[b + i] << ", ";
-      outData[b][i] = output[b + i];
+      std::cout << output[offset + i] << ", ";
+      outData[b][i] = output[offset + i];
     }
     std::cout << std::endl;
   }
@@ -370,25 +490,28 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
   for (Py_ssize_t i = 0; i < length; i++) {
     Py_ssize_t len = outputSize;
     PyObject *item = PyTuple_New(len);
+
     for (Py_ssize_t j = 0; j < len; j++)
       PyTuple_SET_ITEM(item, j, PyFloat_FromDouble(outData[i][j]));
     PyTuple_SET_ITEM(result, i, item);
   }
 
-  
+  /* delete[] output; */
 
   return result;
 }
 
 static PyObject* clear_images(PyObject* self, PyObject* args){
   list_of_images.clear();
-  return Py_None; 
+  list_of_images.shrink_to_fit();
+  Py_RETURN_NONE; 
 }
 
 
 static PyObject* clear_crops(PyObject* self, PyObject* args){
   list_of_crops.clear();
-  return Py_None; 
+  list_of_crops.shrink_to_fit();
+  Py_RETURN_NONE; 
 }
 
 static PyObject* clear_cache(PyObject* self, PyObject* args){
@@ -403,11 +526,12 @@ static PyObject* clear_cache(PyObject* self, PyObject* args){
   context->destroy();
   engine->destroy();
   runtime->destroy();
-  return Py_None; 
+  Py_RETURN_NONE; 
 }
 
 
 static PyMethodDef myMethods[] = {
+    {"perform_preprocess", perform_preprocess, METH_VARARGS, "do preprocess with CUDA"},
     {"perform_inference", perform_inference, METH_VARARGS, "do inference with CUDA"},
     {"add_capacity", add_capacity, METH_VARARGS, "initialize capacity"},
     {"load_engine", load_engine, METH_VARARGS, "initialize trt engine"},

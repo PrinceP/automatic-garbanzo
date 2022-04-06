@@ -1,4 +1,6 @@
 #include "preprocess.h"
+#include <iostream>
+
 
 __global__ void warpaffine_kernel( 
     uint8_t* src, int src_line_size, int src_width, 
@@ -43,7 +45,20 @@ __global__ void warpaffine_kernel(
         uint8_t* v2 = const_value;
         uint8_t* v3 = const_value;
         uint8_t* v4 = const_value;
+         
+        if (y_low == -1) {
+          y_low = 0;
+        }
+        if (x_low == -1) {
+          x_low = 0;
+        }
 
+        if (y_high == src_height) {
+          y_high = src_height - 1;
+        }
+        if (x_high == src_width) {
+          x_high = src_width - 1;
+        }
         if (y_low >= 0) {
             if (x_low >= 0)
                 v1 = src + y_low * src_line_size + x_low * 3;
@@ -102,6 +117,7 @@ void preprocess_kernel_img(
     float Imean_values[3],
     float Iscale_values[3],
     cv::Rect crop,
+    int letterbox,
     cudaStream_t stream) {
     int cropX = crop.x;
     int cropY = crop.y;
@@ -109,13 +125,25 @@ void preprocess_kernel_img(
     int cropWidth = crop.width;
 
     AffineMatrix s2d,d2s;
+    
     float scale = std::min(dst_height / (float)cropHeight, dst_width / (float)cropWidth);
-    s2d.value[0] = scale;
+
+    float scaleY = dst_height / (float)cropHeight; 
+    float scaleX = dst_width / (float)cropWidth; 
+     
+    if(letterbox){
+      scaleY = scale;
+      scaleX = scale;
+    }
+
+
+
+    s2d.value[0] = scaleX;
     s2d.value[1] = 0;
-    s2d.value[2] = -scale * cropWidth  * 0.5  + dst_width * 0.5;
+    s2d.value[2] = -scaleX * cropWidth  * 0.5  + dst_width * 0.5;
     s2d.value[3] = 0;
-    s2d.value[4] = scale;
-    s2d.value[5] = -scale * cropHeight * 0.5 + dst_height * 0.5;
+    s2d.value[4] = scaleY;
+    s2d.value[5] = -scaleY * cropHeight * 0.5 + dst_height * 0.5;
 
     cv::Mat m2x3_s2d(2, 3, CV_32F, s2d.value);
     cv::Mat m2x3_d2s(2, 3, CV_32F, d2s.value);
@@ -129,7 +157,11 @@ void preprocess_kernel_img(
     d2s.scale_values[0]=Iscale_values[0]; 
     d2s.scale_values[1]=Iscale_values[1];
     d2s.scale_values[2]=Iscale_values[2];
-    
+ 
+    std::cout <<  "Mean = " << Imean_values[0] << std::endl;
+    std::cout <<  "Scale = " << Iscale_values[0] << std::endl;
+
+
     int jobs = dst_height * dst_width;
     int threads = 256;
     int blocks = ceil(jobs / (float)threads);
@@ -139,7 +171,6 @@ void preprocess_kernel_img(
     /* warpaffine_kernel<<<blocks, threads>>>( */
         src + src_width*3*cropY + cropX*3, src_width*3, cropWidth,
         cropHeight, dst, dst_width,
-        dst_height, 128, d2s, jobs);
-
+        dst_height, 0, d2s, jobs);
     
 }

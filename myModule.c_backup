@@ -51,6 +51,8 @@ static float* buffers[2];
 static uint8_t* img_host = nullptr;
 static uint8_t* img_device = nullptr;
 static uint8_t** hostbuffers;
+static uint8_t** devicebuffers;
+
 static int inputIndex;
 static int outputIndex;
 static int inputHeight;
@@ -214,6 +216,7 @@ static PyObject* add_images(PyObject* self, PyObject* args){
 
   
 
+  CUDA_CHECK(cudaMemcpyAsync(devicebuffers[list_of_images.size()],my_img.data, rows*cols*nchannels ,cudaMemcpyHostToDevice,stream));
 
   std::cout << "Size = " << list_of_images.size() << std::endl;
 
@@ -268,7 +271,6 @@ static PyObject* load_onnx(PyObject* self, PyObject* args){
   IBuilderConfig* config = builder->createBuilderConfig();
   config->setMaxWorkspaceSize(1U << 32);
   config->addOptimizationProfile(profile);
-  std::cout<<"isFP16: "<<isFP16<<"\n";
   if(isFP16){
     config->setFlag(BuilderFlag::kFP16);
   }
@@ -343,6 +345,13 @@ static PyObject* load_engine(PyObject* self, PyObject* args){
   for(int i= 0 ; i < BatchSize; i++)
     CUDA_CHECK(cudaMallocHost(  &hostbuffers[i]   , MAX_IMAGE_INPUT_SIZE_THRESH * 3 ));
 
+  devicebuffers = (uint8_t**)malloc(sizeof(uint8_t*) * BatchSize);
+  for(int i= 0 ; i < BatchSize; i++)
+    CUDA_CHECK(cudaMalloc(  &devicebuffers[i]   , MAX_IMAGE_INPUT_SIZE_THRESH * 3 ));
+
+
+
+
   // prepare input data cache in pinned memory 
   CUDA_CHECK(cudaMallocHost((void**)&img_host, MAX_IMAGE_INPUT_SIZE_THRESH * 3));
   // prepare input data cache in device memory
@@ -384,9 +393,9 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
     cv::Mat img = list_of_images[b];
     cv::Rect crop_of_img  = list_of_crops[b];
   
-    /* unsigned char * p = img.ptr(180, 320); */
-    /* std::cout << "Inference : " << (float)p[0] << std::endl; */
-    /* std::cout << "Inference : " << crop_of_img.x << " " << crop_of_img.y << " " << crop_of_img.width << " " << crop_of_img.height << std::endl; */
+    unsigned char * p = img.ptr(180, 320);
+    std::cout << "Inference : " << (float)p[0] << std::endl;
+    std::cout << "Inference : " << crop_of_img.x << " " << crop_of_img.y << " " << crop_of_img.width << " " << crop_of_img.height << std::endl;
   
     size_t  size_image = img.cols * img.rows * 3;
     size_t  size_image_dst = inputHeight * inputWidth * 3;
@@ -395,14 +404,11 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
     std::cout << size_image_dst << std::endl;
     //copy data to pinned memory
     
-     float my_data[3 * inputWidth * inputHeight]; 
-
-     FILE* fp = fopen("/app/samples/bcc_data/prince_crops/5_395_119_455_187.bin", "rb"); 
-     fread(my_data, 1, sizeof(float) *  inputWidth  * inputHeight * 3, fp); 
-     for(int i=0; i< 50 ; i++){
-	     std::cout<<my_data[i]<<"  ";
-     }
-     fclose(fp); 
+/*     float my_data[3 * inputWidth * inputHeight]; */
+/*  */
+/*     FILE* fp = fopen("/app/samples/bcc_data/prince_crops/5_395_119_455_187.bin", "rb"); */
+/*     fread(my_data, 1, sizeof(float) *  inputWidth  * inputHeight * 3, fp); */
+/*     fclose(fp); */
 
     /* size_image = inputWidth * inputHeight * 3 * sizeof(float); */
     /* memcpy(img_host ,img.data,size_image); */
@@ -411,7 +417,7 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
     //copy data to device memory
     /* CUDA_CHECK(cudaMemcpyAsync(buffer_idx,img.data,size_image,cudaMemcpyHostToDevice,stream)); */
 
-    CUDA_CHECK(cudaMemcpyAsync(img_device,img.data,size_image,cudaMemcpyHostToDevice,stream));
+    /* CUDA_CHECK(cudaMemcpyAsync(img_device,img.data,size_image,cudaMemcpyHostToDevice,stream)); */
     preprocess_kernel_img(img_device, img.cols, img.rows, 
         buffer_idx, inputWidth, inputHeight, 
         mean_values, scale_values,
@@ -440,9 +446,6 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
 
     //Dump input 
 
-    
-  
-   
     size_t size_image_dst = inputWidth * inputHeight * 3;
     float* our_input = new float[batchSize * size_image_dst];  
 
@@ -476,7 +479,7 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
       cv::imwrite(filename, new_output);
       filcount++;
     }
- 
+
 
 
   double outData[length][outputSize];

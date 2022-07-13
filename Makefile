@@ -5,12 +5,13 @@ all:
 	python3 setup.py install
 	# python3 tests/test_bcc_classifier.py
 	# python3 tests/test_vehicle_make.py
-	# python3 tests/test.py
+	python3 tests/test.py
+	# python3 tests/test_vehicle_reidv10.py
 
 build:
 	# ar cru preprocess_test/build/libpreprocess.a
 	# ranlib preprocess_test/build/libpreprocess.a
-	#ranlib preprocess_test/build/libpreprocess.a
+	# ranlib preprocess_test/build/libpreprocess.a
 
 test: build
 	g++ tests/test.c -L. -lvectoradd -o main -L${CUDA_HOME}/lib64 -lcudart

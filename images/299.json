@@ -1,0 +1,30 @@
+{
+  "event_json": {
+    "predicted_data": {
+      "tail-light": [],
+      "head-light": [],
+      "textbox": [],
+      "wheelbox": [],
+      "feat_vec": -1,
+      "view_type": "rear",
+      "make": [],
+      "colour": null,
+      "numberplate": [],
+      "vehiclebox": [
+        {
+          "xmin": 124,
+          "ymin": 47,
+          "width": 267,
+          "height": 215,
+          "name": null,
+          "confidence": 100
+        }
+      ],
+      "filename": "3454701781_20211011135251.299.jpeg",
+      "site": "test",
+      "bucket": "test",
+      "direction": "entry",
+      "image_type": "fullimage"
+    }
+  }
+}

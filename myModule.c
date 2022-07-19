@@ -46,6 +46,7 @@ static cudaStream_t stream;
 
 static std::vector<cv::Mat> list_of_images;
 static std::vector<cv::Rect> list_of_crops;
+static std::vector<int> list_of_crop_indx;
 static float* buffers[2];
 /* static float* output; */
 static uint8_t* img_host = nullptr;
@@ -154,6 +155,16 @@ static PyObject* add_capacity(PyObject* self, PyObject* args){
   list_of_crops.reserve(n);
   Py_RETURN_NONE;
 }
+
+
+static PyObject* add_crop_indexes(PyObject* self,PyObject* args){
+	int x;
+	if(!PyArg_ParseTuple(args,"i",&x))
+		return NULL;
+	list_of_crop_indx.push_back(x);
+	Py_RETURN_NONE;
+}
+
 
 static PyObject* add_crops(PyObject* self, PyObject* args){
 
@@ -352,8 +363,11 @@ static PyObject* load_engine(PyObject* self, PyObject* args){
 
 static PyObject* perform_inference(PyObject* self, PyObject* args){
   
-  int length = list_of_images.size();
-  printf("Total Images taken: %d \n", length);
+//int length = list_of_images.size();
+  int no_of_images=list_of_images.size();
+  printf("Total Images taken: %d \n",no_of_images);
+  int length = list_of_crops.size();
+  printf("Total no of crops take:%d\n",length);
   PyObject *mean_values_input;
   PyObject *scale_values_input;
 
@@ -381,7 +395,7 @@ static PyObject* perform_inference(PyObject* self, PyObject* args){
     
     std::cout << b << std::endl;
 
-    cv::Mat img = list_of_images[b];
+    cv::Mat img = list_of_images[list_of_crop_indx[b]];
     cv::Rect crop_of_img  = list_of_crops[b];
   
     /* unsigned char * p = img.ptr(180, 320); */
@@ -548,6 +562,7 @@ static PyMethodDef myMethods[] = {
     {"clear_images", clear_images, METH_VARARGS, "clear images"},
     {"clear_crops", clear_crops, METH_VARARGS, "clear images"},
     {"clear_cache", clear_cache, METH_VARARGS, "clear images"},
+    {"add_crop_indexes",add_crop_indexes,METH_VARARGS,"add crop indexes"},
     {NULL, NULL, 0, NULL}
 };
 
